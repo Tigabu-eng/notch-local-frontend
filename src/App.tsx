@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState, useRef } from 'react'
 import { analyzeCall, getInsights, listCalls, uploadDocx, type CallInsight, type CallResponse } from './api'
 
 // ---------- configuration ----------
-const SERVER_CHAT_URL = ""; 
+const API_BASE_URL = (import.meta as any).env.VITE_API_BASE_URL || 'http://localhost:8000'
+const SERVER_CHAT_URL = `${API_BASE_URL}/api/calls/search` ; 
 
 // ---------- helper: format date ----------
 function formatDate(iso: string | undefined) {
@@ -121,8 +122,8 @@ const ChatWidget: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: userMsg,
-          sessionId: sessionId,
+          query: userMsg,
+          // sessionId: sessionId,
           // email can be added if needed
         })
       });

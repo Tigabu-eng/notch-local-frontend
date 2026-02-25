@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useRef } from 'react'
 import { analyzeCall, getInsights, listCalls, uploadDocx, type CallInsight, type CallResponse } from './api'
 
 function formatDate(iso: string | undefined) {
@@ -8,7 +8,376 @@ function formatDate(iso: string | undefined) {
   return d.toLocaleString()
 }
 
+// ---------- simple local chatbot (mock) ----------
+function getLocalBotReply(userMessage: string): string {
+  const msg = userMessage.toLowerCase()
+  if (msg.includes('hello') || msg.includes('hi')) {
+    return "Hello! I'm your Notch AI assistant. How can I help you with the calls today?"
+  }
+  if (msg.includes('action') || msg.includes('next step')) {
+    return "You can view action items in the insights panel. Would you like me to explain any of them?"
+  }
+  if (msg.includes('summary')) {
+    return "The summary is shown under the Call details. If you need more detail, try asking about a specific part."
+  }
+  if (msg.includes('thank')) {
+    return "You're welcome! Feel free to ask if anything else comes up."
+  }
+  return "I'm here to help with follow‑up questions about your calls. Try asking about a specific insight or action item."
+}
+
+
+const ChatWidget: React.FC = () => {
+  const [isOpen, setIsOpen] = useState(false)
+  const [messages, setMessages] = useState<Array<{ text: string; sender: 'user' | 'bot' }>>([
+    { text: "Hi! I'm your Notch AI assistant. Ask me anything about the calls or insights.", sender: 'bot' }
+  ])
+  const [inputValue, setInputValue] = useState('')
+  const [isTyping, setIsTyping] = useState(false)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // optional session ID (stored for future server integration)
+  const [sessionId] = useState(() => {
+    const stored = localStorage.getItem('chatSessionId')
+    if (stored) return stored
+    const newId = 'sess-' + Math.random().toString(36).substr(2, 9) + '-' + Date.now()
+    localStorage.setItem('chatSessionId', newId)
+    return newId
+  })
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages])
+
+  const handleSend = async () => {
+    if (!inputValue.trim()) return
+    const userMsg = inputValue.trim()
+    setMessages(prev => [...prev, { text: userMsg, sender: 'user' }])
+    setInputValue('')
+    setIsTyping(true)
+
+    // Simulate network delay, then bot reply
+    setTimeout(() => {
+      const botReply = getLocalBotReply(userMsg)
+      setMessages(prev => [...prev, { text: botReply, sender: 'bot' }])
+      setIsTyping(false)
+    }, 800)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  // Speech recognition (optional)
+  const [recognition, setRecognition] = useState<any>(null)
+  useEffect(() => {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const Rec = window.SpeechRecognition || window.webkitSpeechRecognition
+      const recognizer = new Rec()
+      recognizer.lang = 'en-US'
+      recognizer.continuous = false
+      recognizer.interimResults = false
+      recognizer.onresult = (evt: any) => {
+        const transcript = evt.results[0][0].transcript
+        setInputValue(transcript)
+        // optionally auto‑send after speech
+        setTimeout(() => handleSend(), 100)
+      }
+      recognizer.onerror = () => {
+        setMessages(prev => [...prev, { text: 'Speech recognition failed. Please type.', sender: 'bot' }])
+      }
+      setRecognition(recognizer)
+    }
+  }, [])
+
+  const handleMic = () => {
+    if (recognition) {
+      try {
+        recognition.start()
+      } catch (e) {
+        console.warn('mic error', e)
+      }
+    }
+  }
+
+  return (
+    <>
+      {/* toggle icon – fixed at bottom right */}
+      <button
+        onClick={() => setIsOpen(true)}
+        style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          width: '56px',
+          height: '56px',
+          borderRadius: '28px',
+          background: '#eb6209',
+          color: '#fff',
+          border: 'none',
+          cursor: 'pointer',
+          boxShadow: '0 6px 16px rgba(0,0,0,0.3)',
+          zIndex: 1100, // above the panel when closed
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'transform 0.2s',
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.05)')}
+        onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+      >
+        <i className="fas fa-comment-dots" style={{ fontSize: '24px' }}></i>
+      </button>
+
+      {/* collapsible right panel */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: '380px',
+          maxWidth: '100%',
+          background: 'rgba(29, 73, 94, 0.95)',
+          backdropFilter: 'blur(12px)',
+          borderLeft: '1px solid rgba(255,255,255,0.15)',
+          boxShadow: '-4px 0 20px rgba(0,0,0,0.3)',
+          zIndex: 1000,
+          transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
+          transition: 'transform 0.3s ease-in-out',
+          display: 'flex',
+          flexDirection: 'column',
+          color: '#fff',
+        }}
+      >
+        {/* header */}
+        <div
+          style={{
+            padding: '20px 24px',
+            borderBottom: '1px solid rgba(255,255,255,0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+          }}
+        >
+          <i className="fas fa-robot" style={{ color: '#eb6209', fontSize: '24px' }}></i>
+          <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, flex: 1 }}>Notch Chat</h3>
+          <button
+            onClick={() => setIsOpen(false)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#fff',
+              fontSize: '24px',
+              cursor: 'pointer',
+              padding: '4px 8px',
+              borderRadius: '20px',
+              transition: 'background 0.2s',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* messages area */}
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '20px 24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+          }}
+        >
+          {messages.map((msg, idx) => (
+            <div
+              key={idx}
+              style={{
+                display: 'flex',
+                gap: '12px',
+                alignItems: 'flex-start',
+                flexDirection: msg.sender === 'user' ? 'row-reverse' : 'row',
+              }}
+            >
+              <div
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '18px',
+                  background: msg.sender === 'user' ? '#eb6209' : 'rgba(255,255,255,0.15)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '16px',
+                  color: '#fff',
+                  flexShrink: 0,
+                }}
+              >
+                {msg.sender === 'user' ? <i className="fas fa-user"></i> : <i className="fas fa-robot"></i>}
+              </div>
+              <div
+                style={{
+                  maxWidth: '70%',
+                  padding: '12px 16px',
+                  borderRadius: '20px',
+                  background: msg.sender === 'user' ? '#eb6209' : 'rgba(255,255,255,0.1)',
+                  border: msg.sender === 'bot' ? '1px solid rgba(255,255,255,0.15)' : 'none',
+                  color: '#fff',
+                  wordBreak: 'break-word',
+                  lineHeight: '1.5',
+                  fontSize: '14px',
+                }}
+              >
+                {msg.text}
+              </div>
+            </div>
+          ))}
+          {isTyping && (
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '18px',
+                  background: 'rgba(255,255,255,0.15)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <i className="fas fa-robot"></i>
+              </div>
+              <div
+                style={{
+                  background: 'rgba(255,255,255,0.1)',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                  borderRadius: '20px',
+                  padding: '12px 16px',
+                  color: 'rgba(255,255,255,0.7)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <span>typing</span>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <span style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: 'rgba(255,255,255,0.7)',
+                    animation: 'bounce 1.4s infinite ease-in-out both',
+                  }}></span>
+                  <span style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: 'rgba(255,255,255,0.7)',
+                    animation: 'bounce 1.4s infinite ease-in-out both',
+                    animationDelay: '-0.16s',
+                  }}></span>
+                  <span style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: 'rgba(255,255,255,0.7)',
+                    animation: 'bounce 1.4s infinite ease-in-out both',
+                    animationDelay: '-0.32s',
+                  }}></span>
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* input area */}
+        <div
+          style={{
+            padding: '16px 24px 24px',
+            borderTop: '1px solid rgba(255,255,255,0.1)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              placeholder="Ask a follow‑up..."
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              style={{
+                flex: 1,
+                padding: '14px 20px',
+                borderRadius: '40px',
+                border: '1px solid rgba(255,255,255,0.2)',
+                background: 'rgba(255,255,255,0.05)',
+                color: '#fff',
+                fontSize: '15px',
+                outline: 'none',
+              }}
+            />
+            <button
+              onClick={handleSend}
+              style={{
+                padding: '14px 20px',
+                borderRadius: '40px',
+                border: 'none',
+                background: '#eb6209',
+                color: '#fff',
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#ff7a2a')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = '#eb6209')}
+            >
+              <i className="fas fa-paper-plane"></i>
+            </button>
+            {recognition && (
+              <button
+                onClick={handleMic}
+                style={{
+                  padding: '14px 20px',
+                  borderRadius: '40px',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'rgba(255,255,255,0.05)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.15)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+              >
+                <i className="fas fa-microphone"></i>
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* animation keyframes */}
+      <style>{`
+        @keyframes bounce {
+          0%, 80%, 100% { transform: scale(0); }
+          40% { transform: scale(1); }
+        }
+      `}</style>
+    </>
+  )
+}
+
+// ---------- main App component ----------
 export default function App() {
+  // ... (keep all existing state and functions exactly as they were) ...
   const [calls, setCalls] = useState<CallResponse[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = useMemo(() => calls.find(c => c.id === selectedId) || null, [calls, selectedId])
@@ -45,7 +414,6 @@ export default function App() {
     setError(null)
     try {
       const data = await getInsights(callId)
-      console.log('Got insights:', data)
       setInsights(data)
     } catch (e: any) {
       const msg = e?.message || String(e)
@@ -61,12 +429,10 @@ export default function App() {
 
   useEffect(() => {
     refreshCalls()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     if (selectedId) refreshInsights(selectedId)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId])
 
   async function onUpload(e: React.FormEvent) {
@@ -269,6 +635,9 @@ export default function App() {
           ) : null}
         </div>
       </div>
+
+      {/* chat widget */}
+      <ChatWidget />
     </div>
   )
 }

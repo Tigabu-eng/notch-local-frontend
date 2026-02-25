@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react'
 import { analyzeCall, getInsights, listCalls, uploadDocx, type CallInsight, type CallResponse } from './api'
 
+// ---------- configuration ----------
+const SERVER_CHAT_URL = ""; 
+
+// ---------- helper: format date ----------
 function formatDate(iso: string | undefined) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -8,25 +12,76 @@ function formatDate(iso: string | undefined) {
   return d.toLocaleString()
 }
 
-// ---------- simple local chatbot (mock) ----------
-function getLocalBotReply(userMessage: string): string {
-  const msg = userMessage.toLowerCase()
-  if (msg.includes('hello') || msg.includes('hi')) {
-    return "Hello! I'm your Notch AI assistant. How can I help you with the calls today?"
+// ---------- format structured search results into Markdown ----------
+function formatSearchResults(data: any): string {
+  if (!data || !data.results || !Array.isArray(data.results) || data.results.length === 0) {
+    return "No results found."
   }
-  if (msg.includes('action') || msg.includes('next step')) {
-    return "You can view action items in the insights panel. Would you like me to explain any of them?"
-  }
-  if (msg.includes('summary')) {
-    return "The summary is shown under the Call details. If you need more detail, try asking about a specific part."
-  }
-  if (msg.includes('thank')) {
-    return "You're welcome! Feel free to ask if anything else comes up."
-  }
-  return "I'm here to help with follow‑up questions about your calls. Try asking about a specific insight or action item."
+
+  let md = `### ${data.query || 'Search Results'}\n\n`;
+  md += `**Total results:** ${data.total_results || data.results.length}\n\n`;
+
+  // table header
+  md += `| Name | Title | Company | Similarity |\n`;
+  md += `|------|-------|---------|------------|\n`;
+
+  data.results.forEach((item: any) => {
+    const name = item.full_name || 'N/A';
+    const title = item.current_title || 'N/A';
+    const company = item.current_company || '—';
+    const sim = item.similarity ? (item.similarity * 100).toFixed(1) + '%' : '—';
+    md += `| ${name} | ${title} | ${company} | ${sim} |\n`;
+  });
+
+  md += `\n---\n\n`;
+
+  // detailed view for each executive
+  data.results.forEach((item: any, idx: number) => {
+    md += `#### ${idx + 1}. ${item.full_name || 'Executive'}\n\n`;
+
+    if (item.profile) {
+      const p = item.profile;
+      if (p.summary) {
+        md += p.summary + '\n\n';
+      } else {
+        // structured fields
+        if (p.industries && p.industries.length) {
+          md += `**Industries:** ${p.industries.join(', ')}\n\n`;
+        }
+        if (p.transformation_experience && p.transformation_experience.length) {
+          md += `**Transformations:**\n`;
+          p.transformation_experience.forEach((t: any) => {
+            md += `- **${t.role}** ${t.type}: ${t.description}`;
+            if (t.quantifiable_impact) md += ` (impact: ${t.quantifiable_impact})`;
+            md += '\n';
+          });
+          md += '\n';
+        }
+        if (p.private_equity_exposure && p.private_equity_exposure.length) {
+          md += `**PE Exposure:** ${p.private_equity_exposure.join(', ')}\n\n`;
+        }
+        if (p.leadership_scope) {
+          const ls = p.leadership_scope;
+          md += `**Leadership Scope:** `;
+          if (ls.team_size_managed) md += `Team: ${ls.team_size_managed}, `;
+          if (ls.budget_responsibility) md += `Budget: ${ls.budget_responsibility}, `;
+          if (ls.geographical_scope) md += `Scope: ${ls.geographical_scope}`;
+          md += '\n\n';
+        }
+        if (p.achievements && p.achievements.length) {
+          md += `**Achievements:**\n`;
+          p.achievements.forEach((a: string) => { md += `- ${a}\n`; });
+          md += '\n';
+        }
+      }
+    }
+    md += `---\n\n`;
+  });
+
+  return md;
 }
 
-
+// ---------- Chat Widget – collapsible right panel (glassmorphism) ----------
 const ChatWidget: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState<Array<{ text: string; sender: 'user' | 'bot' }>>([
@@ -60,12 +115,43 @@ const ChatWidget: React.FC = () => {
     setInputValue('')
     setIsTyping(true)
 
-    // Simulate network delay, then bot reply
-    setTimeout(() => {
-      const botReply = getLocalBotReply(userMsg)
-      setMessages(prev => [...prev, { text: botReply, sender: 'bot' }])
-      setIsTyping(false)
-    }, 800)
+    try {
+      // Call the actual backend
+      const response = await fetch(SERVER_CHAT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMsg,
+          sessionId: sessionId,
+          // email can be added if needed
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Determine if the response contains structured results
+      let botReply: string;
+      if (data && data.results) {
+        botReply = formatSearchResults(data);
+      } else if (data && data.answer) {
+        botReply = data.answer;
+      } else if (typeof data === 'string') {
+        botReply = data;
+      } else {
+        botReply = "Received response, but format not recognized.";
+      }
+
+      setMessages(prev => [...prev, { text: botReply, sender: 'bot' }]);
+    } catch (error) {
+      console.error('Chat error:', error);
+      setMessages(prev => [...prev, { text: 'Sorry, I encountered an error. Please try again.', sender: 'bot' }]);
+    } finally {
+      setIsTyping(false);
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -124,7 +210,7 @@ const ChatWidget: React.FC = () => {
           border: 'none',
           cursor: 'pointer',
           boxShadow: '0 6px 16px rgba(0,0,0,0.3)',
-          zIndex: 1100, // above the panel when closed
+          zIndex: 1100,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -168,7 +254,7 @@ const ChatWidget: React.FC = () => {
           }}
         >
           <i className="fas fa-robot" style={{ color: '#eb6209', fontSize: '24px' }}></i>
-          <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, flex: 1 }}>Notch Chat</h3>
+          <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, flex: 1 }}>Notch AI Assistant</h3>
           <button
             onClick={() => setIsOpen(false)}
             style={{
@@ -238,7 +324,12 @@ const ChatWidget: React.FC = () => {
                   fontSize: '14px',
                 }}
               >
-                {msg.text}
+                {/* Render markdown content for bot messages */}
+                {msg.sender === 'bot' ? (
+                  <div dangerouslySetInnerHTML={{ __html: marked.parse(msg.text) }} />
+                ) : (
+                  msg.text
+                )}
               </div>
             </div>
           ))}
@@ -375,7 +466,7 @@ const ChatWidget: React.FC = () => {
   )
 }
 
-// ---------- main App component ----------
+// ---------- main App component (unchanged except chat widget) ----------
 export default function App() {
   // ... (keep all existing state and functions exactly as they were) ...
   const [calls, setCalls] = useState<CallResponse[]>([])

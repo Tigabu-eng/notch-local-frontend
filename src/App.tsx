@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useRef } from 'react'
+import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { analyzeCall, getInsights, listCalls, uploadDocx, type CallInsight, type CallResponse } from './api'
 
 // ---------- configuration ----------
@@ -13,7 +13,7 @@ function formatDate(iso: string | undefined) {
   return d.toLocaleString()
 }
 
-// ---------- format structured search results into Markdown ----------
+// ---------- format structured search results into Markdown with interactive summary ----------
 function formatBotResponse(data: any): string {
   let md = ''
 
@@ -36,13 +36,21 @@ function formatBotResponse(data: any): string {
       const company = item.current_company || '—'
       const callType = item.type || '—'
       const seniority = item.seniority_level || '—'
-      // Extract summary – clean up newlines and truncate if too long for table cell
-      let summary = item.profile?.summary || ''
-      // Remove extra newlines and trim
-      summary = summary.replace(/\s+/g, ' ').trim()
-      if (summary.length > 100) summary = summary.slice(0, 100) + '…'
+      
+      // Extract summary – clean up newlines and truncate for display
+      let fullSummary = item.profile?.summary || ''
+      const cleanSummary = fullSummary.replace(/\s+/g, ' ').trim()
+      let displaySummary = cleanSummary
+      if (displaySummary.length > 100) {
+        displaySummary = displaySummary.slice(0, 100) + '…'
+      }
 
-      md += `| ${name} | ${title} | ${company} | ${callType} | ${seniority} | ${summary} |\n`
+      // Make the summary clickable – we embed the item ID as a data attribute
+      // We'll use a span with role="button" and a class for event delegation
+      md += `| ${name} | ${title} | ${company} | ${callType} | ${seniority} | ` +
+            `<span class="summary-clickable" data-profile-id="${item.id}" ` +
+            `style="cursor:pointer; text-decoration:underline; text-decoration-style:dotted;">` +
+            `${displaySummary}</span> |\n`
     })
 
     md += '\n'
@@ -56,7 +64,157 @@ function formatBotResponse(data: any): string {
   return md
 }
 
-// ---------- Chat Widget – collapsible right panel (glassmorphism) ----------
+// ---------- Profile Detail Modal (glassmorphism, centered) ----------
+const ProfileModal: React.FC<{
+  profile: any;
+  onClose: () => void;
+}> = ({ profile, onClose }) => {
+  if (!profile) return null
+
+  // Helper to render profile fields nicely
+  const renderField = (label: string, value: any) => {
+    if (!value) return null
+    if (typeof value === 'string') {
+      return <p><strong>{label}:</strong> {value}</p>
+    }
+    if (Array.isArray(value)) {
+      if (value.length === 0) return null
+      return (
+        <div>
+          <strong>{label}:</strong>
+          <ul style={{ marginTop: 4, marginBottom: 8 }}>
+            {value.map((v, i) => (
+              <li key={i}>{typeof v === 'object' ? JSON.stringify(v) : v}</li>
+            ))}
+          </ul>
+        </div>
+      )
+    }
+    if (typeof value === 'object') {
+      return (
+        <div>
+          <strong>{label}:</strong>
+          <pre style={{ background: 'rgba(0,0,0,0.2)', padding: 8, borderRadius: 8, fontSize: 12 }}>
+            {JSON.stringify(value, null, 2)}
+          </pre>
+        </div>
+      )
+    }
+    return null
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        backdropFilter: 'blur(10px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 3000,
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: 600,
+          width: '100%',
+          maxHeight: '80vh',
+          overflowY: 'auto',
+          background: 'rgba(29, 73, 94, 0.95)',
+          backdropFilter: 'blur(12px)',
+          borderRadius: 24,
+          border: '1px solid rgba(255,255,255,0.15)',
+          boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
+          padding: 24,
+          color: '#fff',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>
+            {profile.full_name || 'Profile Details'}
+          </h3>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#fff',
+              fontSize: 24,
+              cursor: 'pointer',
+              padding: '4px 8px',
+              borderRadius: 20,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <p><strong>Title:</strong> {profile.current_title || 'N/A'}</p>
+          <p><strong>Company:</strong> {profile.current_company || '—'}</p>
+          <p><strong>Seniority:</strong> {profile.seniority_level || '—'}</p>
+          <p><strong>Call Type:</strong> {profile.type || '—'}</p>
+          
+          {profile.profile && (
+            <>
+              <div>
+                <strong>Summary:</strong>
+                <div style={{ marginTop: 8, background: 'rgba(0,0,0,0.2)', padding: 12, borderRadius: 8 }}>
+                  {profile.profile.summary || 'No summary available.'}
+                </div>
+              </div>
+
+              {renderField('Industries', profile.profile.industries)}
+              {profile.profile.transformation_experience && profile.profile.transformation_experience.length > 0 && (
+                <div>
+                  <strong>Transformations:</strong>
+                  <ul style={{ marginTop: 4 }}>
+                    {profile.profile.transformation_experience.map((t: any, i: number) => (
+                      <li key={i}>
+                        {t.role} – {t.type}: {t.description}
+                        {t.quantifiable_impact && ` (impact: ${t.quantifiable_impact})`}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {renderField('Private Equity Exposure', profile.profile.private_equity_exposure)}
+              {profile.profile.leadership_scope && (
+                <div>
+                  <strong>Leadership Scope:</strong>
+                  <ul style={{ marginTop: 4 }}>
+                    {profile.profile.leadership_scope.team_size_managed && (
+                      <li>Team size: {profile.profile.leadership_scope.team_size_managed}</li>
+                    )}
+                    {profile.profile.leadership_scope.budget_responsibility && (
+                      <li>Budget: {profile.profile.leadership_scope.budget_responsibility}</li>
+                    )}
+                    {profile.profile.leadership_scope.geographical_scope && (
+                      <li>Scope: {profile.profile.leadership_scope.geographical_scope}</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+              {renderField('Achievements', profile.profile.achievements)}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------- Chat Widget – collapsible right panel with resizing and detail modal ----------
 const ChatWidget: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState<Array<{ text: string; sender: 'user' | 'bot' }>>([
@@ -65,15 +223,74 @@ const ChatWidget: React.FC = () => {
   const [inputValue, setInputValue] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
 
-  // optional session ID (stored for future server integration)
-  const [sessionId] = useState(() => {
-    const stored = localStorage.getItem('chatSessionId')
-    if (stored) return stored
-    const newId = 'sess-' + Math.random().toString(36).substr(2, 9) + '-' + Date.now()
-    localStorage.setItem('chatSessionId', newId)
-    return newId
-  })
+  // For storing the last search response data (to access full profiles on click)
+  const [lastSearchData, setLastSearchData] = useState<any>(null)
+
+  // For profile detail modal
+  const [selectedProfile, setSelectedProfile] = useState<any>(null)
+
+  // Resizable panel
+  const panelRef = useRef<HTMLDivElement>(null)
+  const [panelWidth, setPanelWidth] = useState(380) // initial width
+  const [isDragging, setIsDragging] = useState(false)
+  const dragStartX = useRef(0)
+  const dragStartWidth = useRef(0)
+
+  // Handle drag start on the left edge
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDragging(true)
+    dragStartX.current = e.clientX
+    dragStartWidth.current = panelWidth
+  }, [panelWidth])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return
+      const delta = dragStartX.current - e.clientX // moving left increases width
+      const newWidth = Math.min(Math.max(dragStartWidth.current + delta, 380), window.innerWidth * 0.8)
+      setPanelWidth(newWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsDragging(false)
+    }
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDragging])
+
+  // Click handler for summary links (event delegation)
+  useEffect(() => {
+    const container = messagesContainerRef.current
+    if (!container) return
+
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      const clickable = target.closest('.summary-clickable')
+      if (clickable) {
+        const profileId = clickable.getAttribute('data-profile-id')
+        if (profileId && lastSearchData?.results) {
+          const profile = lastSearchData.results.find((p: any) => p.id === profileId)
+          if (profile) {
+            setSelectedProfile(profile)
+          }
+        }
+      }
+    }
+
+    container.addEventListener('click', handleClick)
+    return () => container.removeEventListener('click', handleClick)
+  }, [lastSearchData])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -91,14 +308,10 @@ const ChatWidget: React.FC = () => {
     setIsTyping(true)
 
     try {
-      // Call the actual backend
       const response = await fetch(SERVER_CHAT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: userMsg,
-          // sessionId: sessionId,
-        })
+        body: JSON.stringify({ query: userMsg })
       });
 
       if (!response.ok) {
@@ -107,9 +320,10 @@ const ChatWidget: React.FC = () => {
 
       const data = await response.json();
 
-      // Use the new formatter that combines answer and results table
-      const botReply = formatBotResponse(data);
+      // Store full response for later detail lookup
+      setLastSearchData(data)
 
+      const botReply = formatBotResponse(data);
       setMessages(prev => [...prev, { text: botReply, sender: 'bot' }]);
     } catch (error) {
       console.error('Chat error:', error);
@@ -138,7 +352,6 @@ const ChatWidget: React.FC = () => {
       recognizer.onresult = (evt: any) => {
         const transcript = evt.results[0][0].transcript
         setInputValue(transcript)
-        // optionally auto‑send after speech
         setTimeout(() => handleSend(), 100)
       }
       recognizer.onerror = () => {
@@ -187,14 +400,15 @@ const ChatWidget: React.FC = () => {
         <i className="fas fa-comment-dots" style={{ fontSize: '24px' }}></i>
       </button>
 
-      {/* collapsible right panel */}
+      {/* collapsible right panel with resizable handle */}
       <div
+        ref={panelRef}
         style={{
           position: 'fixed',
           top: 0,
           right: 0,
           bottom: 0,
-          width: '380px',
+          width: panelWidth,
           maxWidth: '100%',
           background: 'rgba(29, 73, 94, 0.95)',
           backdropFilter: 'blur(12px)',
@@ -202,12 +416,27 @@ const ChatWidget: React.FC = () => {
           boxShadow: '-4px 0 20px rgba(0,0,0,0.3)',
           zIndex: 1000,
           transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
-          transition: 'transform 0.3s ease-in-out',
+          transition: isDragging ? 'none' : 'transform 0.3s ease-in-out',
           display: 'flex',
           flexDirection: 'column',
           color: '#fff',
         }}
       >
+        {/* Resize handle (left edge) */}
+        <div
+          onMouseDown={handleMouseDown}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: '8px',
+            cursor: 'ew-resize',
+            background: 'transparent',
+            zIndex: 1001,
+          }}
+        />
+
         {/* header */}
         <div
           style={{
@@ -219,7 +448,7 @@ const ChatWidget: React.FC = () => {
           }}
         >
           <i className="fas fa-robot" style={{ color: '#eb6209', fontSize: '24px' }}></i>
-          <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, flex: 1 }}>Notch AI Assistant</h3>
+          <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 600, flex: 1 }}>Notch Chat</h3>
           <button
             onClick={() => setIsOpen(false)}
             style={{
@@ -241,6 +470,7 @@ const ChatWidget: React.FC = () => {
 
         {/* messages area */}
         <div
+          ref={messagesContainerRef}
           style={{
             flex: 1,
             overflowY: 'auto',
@@ -289,7 +519,6 @@ const ChatWidget: React.FC = () => {
                   fontSize: '14px',
                 }}
               >
-                {/* Render markdown content for bot messages */}
                 {msg.sender === 'bot' ? (
                   <div dangerouslySetInnerHTML={{ __html: marked.parse(msg.text) }} />
                 ) : (
@@ -419,6 +648,14 @@ const ChatWidget: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Profile detail modal */}
+      {selectedProfile && (
+        <ProfileModal
+          profile={selectedProfile}
+          onClose={() => setSelectedProfile(null)}
+        />
+      )}
 
       {/* animation keyframes */}
       <style>{`

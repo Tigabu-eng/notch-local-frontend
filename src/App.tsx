@@ -15,11 +15,16 @@ function formatDate(iso: string | undefined) {
 
 // ---------- format structured search results into Markdown with interactive summary ----------
 function formatBotResponse(data: any): string {
+  // Prefer server-provided Markdown (new backend)
+  if (data && typeof data.markdown === 'string' && data.markdown.trim()) {
+    return data.markdown
+  }
+
   let md = ''
 
-  // Always include the answer if present
-  if (data.answer) {
-    md += data.answer + '\n\n'
+  // Backward-compat: older backend returned `answer`
+  if (data?.answer) {
+    md += data.answer + ''
   }
 
   // If there are results, add a table with the required columns
@@ -58,7 +63,7 @@ function formatBotResponse(data: any): string {
 
   // If we have neither answer nor results, return a fallback
   if (!md.trim()) {
-    md = 'No results found.'
+    md = 'I couldn’t find anything relevant yet. Could you share a bit more detail (who, what topic, or timeframe) so I can help?'
   }
 
   return md
@@ -220,6 +225,7 @@ const ChatWidget: React.FC = () => {
   const [messages, setMessages] = useState<Array<{ text: string; sender: 'user' | 'bot' }>>([
     { text: "Hi! I'm your Notch AI assistant. Ask me anything about the calls or insights.", sender: 'bot' }
   ])
+  const [sessionId, setSessionId] = useState<string>(() => localStorage.getItem('notch_session_id') || '')
   const [inputValue, setInputValue] = useState('')
   const [isTyping, setIsTyping] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -311,7 +317,7 @@ const ChatWidget: React.FC = () => {
       const response = await fetch(SERVER_CHAT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMsg })
+        body: JSON.stringify({ query: userMsg, session_id: sessionId || undefined })
       });
 
       if (!response.ok) {
@@ -319,6 +325,14 @@ const ChatWidget: React.FC = () => {
       }
 
       const data = await response.json();
+      // Persist/refresh session id for contextual follow-ups
+      if (data?.session_id && typeof data.session_id === 'string') {
+        if (data.session_id !== sessionId) {
+          setSessionId(data.session_id)
+          try { localStorage.setItem('notch_session_id', data.session_id) } catch {}
+        }
+      }
+
 
       // Store full response for later detail lookup
       setLastSearchData(data)

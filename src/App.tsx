@@ -3,7 +3,7 @@ import { analyzeCall, getInsights, listCalls, uploadDocx, type CallInsight, type
 
 // ---------- configuration ----------
 const API_BASE_URL = (import.meta as any).env.VITE_API_BASE_URL || 'http://localhost:8000'
-const SERVER_CHAT_URL = `${API_BASE_URL}/api/calls/search` ; 
+const SERVER_CHAT_URL = `${API_BASE_URL}/api/calls/search`
 
 // ---------- helper: format date ----------
 function formatDate(iso: string | undefined) {
@@ -14,72 +14,46 @@ function formatDate(iso: string | undefined) {
 }
 
 // ---------- format structured search results into Markdown ----------
-function formatSearchResults(data: any): string {
-  if (!data || !data.results || !Array.isArray(data.results) || data.results.length === 0) {
-    return "No results found."
+function formatBotResponse(data: any): string {
+  let md = ''
+
+  // Always include the answer if present
+  if (data.answer) {
+    md += data.answer + '\n\n'
   }
 
-  let md = `### ${data.query || 'Search Results'}\n\n`;
-  md += `**Total results:** ${data.total_results || data.results.length}\n\n`;
+  // If there are results, add a table with the required columns
+  if (data.results && Array.isArray(data.results) && data.results.length > 0) {
+    md += `**Total results:** ${data.total_results || data.results.length}\n\n`
 
-  // table header
-  md += `| Name | Title | Company | Similarity |\n`;
-  md += `|------|-------|---------|------------|\n`;
+    // Table header
+    md += `| Full Name | Title | Company | Call Type | Seniority | Summary |\n`
+    md += `|-----------|-------|---------|-----------|-----------|---------|\n`
 
-  data.results.forEach((item: any) => {
-    const name = item.full_name || 'N/A';
-    const title = item.current_title || 'N/A';
-    const company = item.current_company || '—';
-    const sim = item.similarity ? (item.similarity * 100).toFixed(1) + '%' : '—';
-    md += `| ${name} | ${title} | ${company} | ${sim} |\n`;
-  });
+    data.results.forEach((item: any) => {
+      const name = item.full_name || 'N/A'
+      const title = item.current_title || 'N/A'
+      const company = item.current_company || '—'
+      const callType = item.type || '—'
+      const seniority = item.seniority_level || '—'
+      // Extract summary – clean up newlines and truncate if too long for table cell
+      let summary = item.profile?.summary || ''
+      // Remove extra newlines and trim
+      summary = summary.replace(/\s+/g, ' ').trim()
+      if (summary.length > 100) summary = summary.slice(0, 100) + '…'
 
-  md += `\n---\n\n`;
+      md += `| ${name} | ${title} | ${company} | ${callType} | ${seniority} | ${summary} |\n`
+    })
 
-  // detailed view for each executive
-  data.results.forEach((item: any, idx: number) => {
-    md += `#### ${idx + 1}. ${item.full_name || 'Executive'}\n\n`;
+    md += '\n'
+  }
 
-    if (item.profile) {
-      const p = item.profile;
-      if (p.summary) {
-        md += p.summary + '\n\n';
-      } else {
-        // structured fields
-        if (p.industries && p.industries.length) {
-          md += `**Industries:** ${p.industries.join(', ')}\n\n`;
-        }
-        if (p.transformation_experience && p.transformation_experience.length) {
-          md += `**Transformations:**\n`;
-          p.transformation_experience.forEach((t: any) => {
-            md += `- **${t.role}** ${t.type}: ${t.description}`;
-            if (t.quantifiable_impact) md += ` (impact: ${t.quantifiable_impact})`;
-            md += '\n';
-          });
-          md += '\n';
-        }
-        if (p.private_equity_exposure && p.private_equity_exposure.length) {
-          md += `**PE Exposure:** ${p.private_equity_exposure.join(', ')}\n\n`;
-        }
-        if (p.leadership_scope) {
-          const ls = p.leadership_scope;
-          md += `**Leadership Scope:** `;
-          if (ls.team_size_managed) md += `Team: ${ls.team_size_managed}, `;
-          if (ls.budget_responsibility) md += `Budget: ${ls.budget_responsibility}, `;
-          if (ls.geographical_scope) md += `Scope: ${ls.geographical_scope}`;
-          md += '\n\n';
-        }
-        if (p.achievements && p.achievements.length) {
-          md += `**Achievements:**\n`;
-          p.achievements.forEach((a: string) => { md += `- ${a}\n`; });
-          md += '\n';
-        }
-      }
-    }
-    md += `---\n\n`;
-  });
+  // If we have neither answer nor results, return a fallback
+  if (!md.trim()) {
+    md = 'No results found.'
+  }
 
-  return md;
+  return md
 }
 
 // ---------- Chat Widget – collapsible right panel (glassmorphism) ----------
@@ -124,7 +98,6 @@ const ChatWidget: React.FC = () => {
         body: JSON.stringify({
           query: userMsg,
           // sessionId: sessionId,
-          // email can be added if needed
         })
       });
 
@@ -134,17 +107,8 @@ const ChatWidget: React.FC = () => {
 
       const data = await response.json();
 
-      // Determine if the response contains structured results
-      let botReply: string;
-      if (data && data.results) {
-        botReply = formatSearchResults(data);
-      } else if (data && data.answer) {
-        botReply = data.answer;
-      } else if (typeof data === 'string') {
-        botReply = data;
-      } else {
-        botReply = "Received response, but format not recognized.";
-      }
+      // Use the new formatter that combines answer and results table
+      const botReply = formatBotResponse(data);
 
       setMessages(prev => [...prev, { text: botReply, sender: 'bot' }]);
     } catch (error) {
